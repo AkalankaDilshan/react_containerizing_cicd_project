@@ -1,0 +1,103 @@
+version: 0.2
+
+env:
+  variables:
+    # Your ECR repository name
+    ECR_REPOSITORY: "react_containerizing_cicd_project"
+    # Your container name
+    CONTAINER_NAME: "react-app"
+    # Your AWS account ID
+    AWS_ACCOUNT_ID: "610307146415"
+    # Your AWS region
+    AWS_REGION: "eu-north-1"
+
+phases:
+  install:
+    commands:
+      - echo "Installing dependencies..."
+      - apt-get update -y
+      - apt-get install -y jq
+      - echo "AWS CLI version: $(aws --version)"
+      - echo "Docker version: $(docker --version)"
+      
+  pre_build:
+    commands:
+      - echo "Logging in to Amazon ECR..."
+      - echo "AWS Region: $AWS_REGION"
+      - echo "AWS Account ID: $AWS_ACCOUNT_ID"
+      - echo "ECR Repository: $ECR_REPOSITORY"
+      
+      # ECR Login command
+      - aws ecr get-login-password --region $AWS_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com
+      
+      # Set repository URI
+      - REPOSITORY_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_REGION.amazonaws.com/$ECR_REPOSITORY
+      - echo "Repository URI: $REPOSITORY_URI"
+      
+      # Create ECR repository if it doesn't exist
+      - |
+        if ! aws ecr describe-repositories --repository-names $ECR_REPOSITORY --region $AWS_REGION > /dev/null 2>&1; then
+          echo "Creating ECR repository: $ECR_REPOSITORY"
+          aws ecr create-repository --repository-name $ECR_REPOSITORY --region $AWS_REGION
+        else
+          echo "ECR repository already exists: $ECR_REPOSITORY"
+        fi
+
+  build:
+    commands:
+      - echo "Build started on $(date)"
+      - echo "Building the Docker image..."
+      
+      # Build Docker image
+      - docker build -t $ECR_REPOSITORY .
+      
+      # Tag the image for ECR
+      - docker tag $ECR_REPOSITORY:latest $REPOSITORY_URI:latest
+      
+      # Create additional tag with commit hash if available
+      - |
+        if [ -n "$CODEBUILD_RESOLVED_SOURCE_VERSION" ]; then
+          COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+          docker tag $ECR_REPOSITORY:latest $REPOSITORY_URI:$COMMIT_HASH
+          echo "Also tagged image with commit hash: $COMMIT_HASH"
+        fi
+
+  post_build:
+    commands:
+      - echo "Build completed on $(date)"
+      - echo "Pushing the Docker images to ECR..."
+      
+      # Push the images to ECR
+      - docker push $REPOSITORY_URI:latest
+      
+      # Push commit-tagged image if available
+      - |
+        if [ -n "$CODEBUILD_RESOLVED_SOURCE_VERSION" ]; then
+          COMMIT_HASH=$(echo $CODEBUILD_RESOLVED_SOURCE_VERSION | cut -c 1-7)
+          docker push $REPOSITORY_URI:$COMMIT_HASH
+        fi
+      
+      # Create image definitions for ECS
+      - echo "Writing image definitions file..."
+      - printf '[{"name":"%s","imageUri":"%s"}]' $CONTAINER_NAME $REPOSITORY_URI:latest > imagedefinitions.json
+      
+      # Display image information
+      - echo "Image definitions:"
+      - cat imagedefinitions.json
+      - echo "Docker images:"
+      - docker images
+      
+      # Clean up to reduce storage
+      - echo "Cleaning up build files..."
+      - rm -rf node_modules
+
+artifacts:
+  files:
+    - imagedefinitions.json
+    - Dockerfile
+    - nginx.conf
+  discard-paths: yes
+
+cache:
+  paths:
+    - '/root/.npm/**/*'
