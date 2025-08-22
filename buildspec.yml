@@ -29,3 +29,9 @@ artifacts:
     - Dockerfile
     - nginx.conf
   discard-paths: yes
+
+
+env:
+  variables:
+    REPOSITORY_URI: "610307146415.dkr.ecr.eu-north-1.amazonaws.com/react_containerizing_cicd_project"
+    CONTAINER_NAME: "DevContainer2"
